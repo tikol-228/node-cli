@@ -1,8 +1,11 @@
 {
-  "name": "cli",
-  "version": "1.0.0",
-  "description": "",
+  "name": "cli-audio-visualizer",
+  "version": "2.0.0",
+  "description": "CLI Audio Visualizer with volume and peak meter",
   "main": "index.mjs",
+  "bin": {
+    "cli-audio-visualizer": "index.mjs"
+  },
   "type": "module",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
@@ -21,5 +24,16 @@
   },
   "devDependencies": {
     "nodemon": "^3.1.14"
+  },
+
+  "keywords": ["cli", "audio", "visualizer", "terminal"],
+  "author": "tikol_228",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/tikol-228/node-cli"
+  },
+  "homepage": "https://github.com/tikol-228/node-cli",
+  "bugs": {
+    "url": "https://github.com/tikol-228/node-cli/issues"
   }
 }

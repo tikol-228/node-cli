@@ -1,27 +1,54 @@
+#!/usr/bin/env node
+
 import { spawn } from 'child_process';
 import FFT from 'fft.js';
 import blessed from 'blessed';
 import os from 'os';
+import fs from 'fs';
 
-/**
- * CLI Audio Visualizer (with Volume + Peak Meter)
- */
-
-// --- Configuration ---
+// --- Config ---
 const SAMPLE_RATE = 16000;
 const FFT_SIZE = 1024;
 const CHANNELS = 1;
 
-// --- Params ---
+// --- Args ---
+const args = process.argv.slice(2);
+
+const bgColors = ['black', 'grey', 'blue', 'magenta', 'cyan'];
+let bgIndex = 0;
+
+let mode = 'bars';
+let audioFile = null;
+
+args.forEach(arg => {
+    if (arg.startsWith('--mode=')) {
+        mode = arg.split('=')[1];
+    } else if (!arg.startsWith('--')) {
+        audioFile = arg;
+    }
+});
+
+// --- Validate file ---
+if (audioFile && !fs.existsSync(audioFile)) {
+    console.error(`❌ File not found: ${audioFile}`);
+    process.exit(1);
+}
+
+// --- State ---
 let volume = 0;
 let peakVolume = 0;
+let sensitivity = 1.0;
+let isPaused = false;
 
-// --- FFT Setup ---
+let frequencies = new Float32Array(FFT_SIZE / 2).fill(0);
+let timeData = new Float32Array(FFT_SIZE).fill(0);
+
+// --- FFT ---
 const fft = new FFT(FFT_SIZE);
 const fftInput = new Float32Array(FFT_SIZE);
 const fftOutput = fft.createComplexArray();
 
-// --- UI Setup ---
+// --- UI ---
 const screen = blessed.screen({
     smartCSR: true,
     title: 'CLI Audio Visualizer',
@@ -32,23 +59,22 @@ const container = blessed.box({
     parent: screen,
     width: '100%',
     height: '100%',
-    style: { bg: 'black' }
+    style: { bg: bgColors[bgIndex] }
 });
 
-// --- State ---
-let mode = 'bars';
-const modes = ['bars', 'wave', 'circle'];
-let sensitivity = 1.0;
-let isPaused = false;
-
-let frequencies = new Float32Array(FFT_SIZE / 2).fill(0);
-let timeData = new Float32Array(FFT_SIZE).fill(0);
-
 // --- Audio ---
-function startAudio() {
+function startAudio(file) {
     let audioProcess;
 
-    if (os.platform() === 'darwin') {
+    if (file) {
+        audioProcess = spawn('ffmpeg', [
+            '-i', file,
+            '-f', 's16le',
+            '-ac', CHANNELS.toString(),
+            '-ar', SAMPLE_RATE.toString(),
+            '-'
+        ]);
+    } else if (os.platform() === 'darwin') {
         audioProcess = spawn('ffmpeg', [
             '-f', 'avfoundation',
             '-i', ':0',
@@ -87,18 +113,15 @@ function startAudio() {
                 timeData[i] = val;
             }
 
-            // --- RMS Volume ---
             let sum = 0;
             for (let i = 0; i < FFT_SIZE; i++) {
                 sum += timeData[i] * timeData[i];
             }
             volume = Math.sqrt(sum / FFT_SIZE);
 
-            // --- Peak with decay ---
             peakVolume *= 0.97;
             if (volume > peakVolume) peakVolume = volume;
 
-            // --- FFT ---
             fft.realTransform(fftOutput, fftInput);
 
             for (let i = 0; i < FFT_SIZE / 2; i++) {
@@ -109,64 +132,9 @@ function startAudio() {
             }
         }
     });
-
-    audioProcess.on('error', (err) => {
-        screen.destroy();
-        console.error("Install ffmpeg (macOS) or sox (Linux)");
-        console.error(err.message);
-        process.exit(1);
-    });
 }
 
-// --- Rendering ---
-function render() {
-    if (isPaused) return;
-
-    const { width, height } = screen;
-
-    container.children.forEach(c => c.detach());
-
-    if (mode === 'bars') renderBars(width, height);
-    if (mode === 'wave') renderWave(width, height);
-    if (mode === 'circle') renderCircle(width, height);
-
-    // --- Controls ---
-    blessed.text({
-        parent: container,
-        bottom: 0,
-        left: 0,
-        content: ` [M]ode: ${mode.toUpperCase()} | [+/-] Sens: ${sensitivity.toFixed(1)} | [Space] Pause | [Q]uit `,
-        style: { fg: 'white', bg: '#222222' }
-    });
-
-    // --- Volume Meter ---
-    const barWidth = 20;
-
-    const volBars = Math.round(volume * barWidth);
-    const volBar = '█'.repeat(volBars) + '░'.repeat(barWidth - volBars);
-
-    const peakBars = Math.round(peakVolume * barWidth);
-
-    let peakLine = '';
-    for (let i = 0; i < barWidth; i++) {
-        peakLine += (i === peakBars) ? '|' : ' ';
-    }
-
-    blessed.text({
-        parent: container,
-        top: 1,
-        right: 2,
-        width: barWidth + 10,
-        content:
-            `Vol : [${volBar}]\n` +
-            `Peak:  ${peakLine}`,
-        style: { fg: 'green' }
-    });
-
-    screen.render();
-}
-
-// --- Visualizations ---
+// --- Renderers ---
 function renderBars(w, h) {
     const barW = Math.max(1, Math.floor(w / 64));
     const count = Math.min(64, w);
@@ -184,7 +152,7 @@ function renderBars(w, h) {
                 height: barH,
                 style: {
                     bg: i < count / 3 ? 'green' :
-                        (i < 2 * count / 3 ? 'yellow' : 'red')
+                        i < 2 * count / 3 ? 'yellow' : 'red'
                 }
             });
         }
@@ -238,18 +206,55 @@ function renderCircle(w, h) {
     }
 }
 
+const renderers = {
+    bars: renderBars,
+    wave: renderWave,
+    circle: renderCircle
+};
+
+// --- Render loop ---
+function render() {
+    if (isPaused) return;
+
+    const { width, height } = screen;
+
+    container.children.forEach(c => c.detach());
+
+    // 🔥 BACKGROUND CHANGE HERE
+    container.style.bg = bgColors[bgIndex];
+
+    renderers[mode]?.(width, height);
+
+    blessed.text({
+        parent: container,
+        bottom: 0,
+        left: 0,
+        content: `[${audioFile ? audioFile : 'MIC'}] Mode: ${mode} | Sens: ${sensitivity.toFixed(1)} | B: bg | Q: quit`,
+        style: { fg: 'white', bg: '#222' }
+    });
+
+    screen.render();
+}
+
 // --- Controls ---
 screen.key(['q', 'C-c'], () => process.exit(0));
 
 screen.key(['m'], () => {
-    const idx = modes.indexOf(mode);
-    mode = modes[(idx + 1) % modes.length];
+    const keys = Object.keys(renderers);
+    const idx = keys.indexOf(mode);
+    mode = keys[(idx + 1) % keys.length];
 });
 
 screen.key(['+', '='], () => sensitivity *= 1.2);
 screen.key(['-', '_'], () => sensitivity /= 1.2);
+
 screen.key(['space'], () => isPaused = !isPaused);
 
+// 🔥 CHANGE BACKGROUND
+screen.key(['b', 'B'], () => {
+    bgIndex = (bgIndex + 1) % bgColors.length;
+});
+
 // --- Start ---
-startAudio();
-setInterval(render, 40);
+startAudio(audioFile);
+setInterval(render, 50);
